@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MITpragma solidity ^0.8.19;
+/* ParrotCoin ($PRRT) - Base Chain Edition Funny Parrot, Real Profits. Treasury wallet: 0x0e945f8F8fe54d4989f266F25a6B5704AfF51c34 Built for Base Mainnet using Uniswap V2-compatible router.
+  - 3% tax (2% liquidity, 1% treasury)  - Auto swap & add liquidity  - Owner adjustable parameters  - Total supply: 1,000,000,000 PRRT*/
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";import "@openzeppelin/contracts/access/Ownable.sol";import "@openzeppelin/contracts/security/ReentrancyGuard.sol";import "@openzeppelin/contracts/utils/Address.sol";
+interface IUniswapV2Router02 {    function factory() external pure returns (address);    function WETH() external pure returns (address);
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(        uint amountIn, uint amountOutMin,        address[] calldata path, address to, uint deadline    ) external;
+    function addLiquidityETH(        address token, uint amountTokenDesired,        uint amountTokenMin, uint amountETHMin,        address to, uint deadline    ) external payable returns (uint amountToken, uint amountETH, uint liquidity);}
+contract ParrotCoin is ERC20, Ownable, ReentrancyGuard {    using Address for address;
+    // Base mainnet Uniswap-compatible router    IUniswapV2Router02 public router = IUniswapV2Router02(0x327Df1E6de05895d2ab08513aaDD9313Fe505d86);
+    address public treasuryWallet = 0x0e945f8F8fe54d4989f266F25a6B5704AfF51c34; // YOUR WALLET    bool public swapAndLiquifyEnabled = true;    bool private inSwapAndLiquify;
+    uint256 public swapThreshold;    uint256 public liquidityFee = 200; // 2%    uint256 public treasuryFee = 100;  // 1%    uint256 public feeDenominator = 10000;
+    mapping(address => bool) public isExcludedFromFees;
+    modifier lockTheSwap {        inSwapAndLiquify = true;        _;        inSwapAndLiquify = false;    }
+    constructor() ERC20("ParrotCoin", "PRRT") {        uint256 _totalSupply = 1_000_000_000 * 10 ** decimals(); // 1B supply
+        swapThreshold = _totalSupply / 20000; // 0.005% of total supply
+        // exclude system addresses from fees        isExcludedFromFees[msg.sender] = true;        isExcludedFromFees[address(this)] = true;        isExcludedFromFees[treasuryWallet] = true;
+        _mint(msg.sender, _totalSupply);    }
+    // Core transfer override for fees    function _transfer(address from, address to, uint256 amount) internal override {        uint256 contractTokenBalance = balanceOf(address(this));
+        if (            contractTokenBalance >= swapThreshold &&            !inSwapAndLiquify &&            from != address(this) &&            swapAndLiquifyEnabled        ) {            _swapAndLiquify(contractTokenBalance);        }
+        if (isExcludedFromFees[from] || isExcludedFromFees[to] || (liquidityFee + treasuryFee) == 0) {            super._transfer(from, to, amount);        } else {            uint256 totalFee = liquidityFee + treasuryFee;            uint256 feeAmount = (amount * totalFee) / feeDenominator;            uint256 transferAmount = amount - feeAmount;
+            super._transfer(from, address(this), feeAmount);            super._transfer(from, to, transferAmount);        }    }
+    function _swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap nonReentrant {        uint256 totalFee = liquidityFee + treasuryFee;        if (totalFee == 0) return;
+        uint256 liquidityTokens = (contractTokenBalance * liquidityFee) / totalFee;        uint256 halfLiquidity = liquidityTokens / 2;        uint256 tokensToSwap = contractTokenBalance - halfLiquidity;
+        uint256 initialETH = address(this).balance;        _swapTokensForETH(tokensToSwap);        uint256 newETH = address(this).balance - initialETH;
+        uint256 ethForLiquidity = (newETH * halfLiquidity) / tokensToSwap;        uint256 ethForTreasury = newETH - ethForLiquidity;
+        if (ethForTreasury > 0) {            (bool sent,) = payable(treasuryWallet).call{value: ethForTreasury}("");            require(sent, "Treasury transfer failed");        }
+        if (halfLiquidity > 0 && ethForLiquidity > 0) {            _approve(address(this), address(router), halfLiquidity);            router.addLiquidityETH{value: ethForLiquidity}(                address(this),                halfLiquidity,                0,                0,                owner(),                block.timestamp            );        }    }
+    function _swapTokensForETH(uint256 tokenAmount) private {        _approve(address(this), address(router), tokenAmount);        address ;        path[0] = address(this);        path[1] = router.WETH();
+        router.swapExactTokensForETHSupportingFeeOnTransferTokens(            tokenAmount,            0,            path,            address(this),            block.timestamp        );    }
+    // === OWNER FUNCTIONS ===    function setFees(uint256 _liquidityFee, uint256 _treasuryFee) external onlyOwner {        require(_liquidityFee + _treasuryFee <= 1000, "Fees too high"); // max 10%        liquidityFee = _liquidityFee;        treasuryFee = _treasuryFee;    }
+    function setTreasuryWallet(address _wallet) external onlyOwner {        require(_wallet != address(0), "zero");        treasuryWallet = _wallet;    }
+    function setSwapThreshold(uint256 amount) external onlyOwner {        swapThreshold = amount;    }
+    function setSwapAndLiquifyEnabled(bool _enabled) external onlyOwner {        swapAndLiquifyEnabled = _enabled;    }
+    function excludeFromFees(address account, bool excluded) external onlyOwner {        isExcludedFromFees[account] = excluded;    }
+    receive() external payable {}}
